@@ -1,0 +1,11 @@
+Method,Parameter,Mean,RMSE
+Basin Probabilistic Means,Hardness,120.35625,63.15
+Basin Medians,Hardness,102.4882353,63.78
+Default,Hardness,109.4705882,64.12
+Eco-region Medians,Hardness,91.3575,70.31
+Eco-region Probabilistic Means,Hardness,97.32,78.27
+Basin Medians,pH,7.688739219,0.39
+Eco-region Medians,pH,7.65975,0.47
+Eco-region Probabilistic Means,pH,7.441052632,0.47
+Basin Probabilistic Means,pH,7.45375,0.55
+Default,pH,7.5,0.56
