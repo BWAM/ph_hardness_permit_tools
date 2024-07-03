@@ -1,0 +1,933 @@
+---
+title: "testing_models_medians"
+author: "Keleigh Reynolds"
+date: "2023-06-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(fetch)
+
+remotes::install_github("BWAM/fetch",
+auth_token = gitcreds::gitcreds_get()$password)
+```
+
+
+```{r fetch data, echo=FALSE, message=FALSE,warning=FALSE,results='markup'}
+chem<-fetch::fetch_chem(path = "C:/Users/kareynol/OneDrive - New York State Office of Information Technology Services/Streams Data Modernization/Cleaned Files",
+                  output = "standard")
+#rite.csv(chem,"data/chem_from_db_6_12_23.csv")
+#write data as an RDS for final versioning
+readr::write_rds(chem,"data/chem_from_db_6_12_23.rds")
+
+hardness<-chem %>% 
+  filter(CHEM_PARAMETER_NAME %in% "HARDNESS (AS CACO3)") %>% 
+  mutate(year = as.numeric(format(CHS_EVENT_SMAS_SAMPLE_DATE,"%Y"))) %>% 
+  filter(year > 2012) %>% 
+  mutate(basin = substr(CHS_EVENT_SMAS_HISTORY_ID,1,2)) %>% 
+  group_by(CHS_EVENT_SMAS_HISTORY_ID,basin) %>% 
+  summarise(median = median(CHR_RESULT_VALUE))
+
+field<-fetch::fetch_field(output = "standard")
+
+ph_raw<-field$insitu %>% 
+  filter(CHEM_PARAMETER_NAME %in% "PH") %>% 
+  mutate(year = as.numeric(format(ISWC_EVENT_SMAS_SAMPLE_DATE,"%Y"))) %>% 
+  filter(year > 2012) %>% 
+  filter(ISWC_RESULT > 1) %>% 
+  mutate(basin = substr(ISWC_EVENT_SMAS_HISTORY_ID,1,2)) %>% 
+  group_by(ISWC_EVENT_SMAS_HISTORY_ID,basin) %>% 
+  summarise(median = median(ISWC_RESULT,na.rm = TRUE))
+
+write.csv(hardness_basin_sum,"outputs/hardness_basin_Catherine.csv")
+
+
+# sites<-fetch::fetch_sites(path = "L:/BWAM Share/data/streams/cleaned_files",
+#                         output = "standard")
+
+#summary for Catherine
+
+ph_basin_sum<-field$insitu %>%
+  filter(CHEM_PARAMETER_NAME %in% "PH") %>%
+  mutate(year = as.numeric(format(ISWC_EVENT_SMAS_SAMPLE_DATE,"%Y"))) %>%
+  filter(year > 2012) %>%
+  group_by(ISWC_EVENT_SMAS_HISTORY_ID) %>% 
+  summarise(median_site = median(ISWC_RESULT,na.rm = TRUE)) %>% 
+  mutate(basin = substr(ISWC_EVENT_SMAS_HISTORY_ID,1,2)) %>%
+  ungroup() %>% 
+  group_by(basin) %>%
+  summarise(median = median(median_site,na.rm = TRUE))
+# 
+hardness_basin_sum <- chem %>%
+  filter(CHEM_PARAMETER_NAME %in% "HARDNESS (AS CACO3)") %>%
+  mutate(year = as.numeric(format(CHS_EVENT_SMAS_SAMPLE_DATE,"%Y"))) %>%
+  filter(year > 2012) %>%
+  mutate(basin = substr(CHS_EVENT_SMAS_HISTORY_ID,1,2),
+         number = 1) %>%
+  group_by(CHS_EVENT_SMAS_HISTORY_ID) %>% 
+  mutate(CHR_RESULT_VALUE_med = median(CHR_RESULT_VALUE)) %>% 
+  ungroup() %>% 
+  group_by(basin) %>%
+  summarise(median = median(CHR_RESULT_VALUE_med,na.rm=TRUE),
+            n = sum(number))
+
+temp_basin_sum<-field$insitu %>%
+  filter(CHEM_PARAMETER_NAME %in% "TEMPERATURE") %>%
+  mutate(year = as.numeric(format(ISWC_EVENT_SMAS_SAMPLE_DATE,"%Y"))) %>%
+  filter(year > 2012) %>%
+  group_by(ISWC_EVENT_SMAS_HISTORY_ID) %>% 
+  summarise(median_site = median(ISWC_RESULT,na.rm = TRUE)) %>% 
+  mutate(basin = substr(ISWC_EVENT_SMAS_HISTORY_ID,1,2)) %>%
+  ungroup() %>% 
+  group_by(basin) %>%
+  summarise(median = median(median_site,na.rm = TRUE))
+
+# write.csv(hardness_basin_sum,"outputs/hardness_basin_Catherine.csv")
+# write.csv(ph_basin_sum,"outputs/ph_basin_Catherine.csv")
+# write.csv(temp_basin_sum,"outputs/temp_basin_Catherine.csv")
+
+
+
+
+```
+
+
+```{r split into train vs test,echo=FALSE, message=FALSE,warning=FALSE,results='markup'}
+
+#make this example reproducible
+set.seed(1)
+df<-hardness
+
+#use 70% of dataset as training set and 30% as test set
+sample <- sample(c(TRUE, FALSE), nrow(df), replace=TRUE, prob=c(0.7,0.3))
+train  <- df[sample, ]
+test   <- df[!sample, ]
+
+#same for ph
+df2<-ph_raw
+
+#use 70% of dataset as training set and 30% as test set
+sample_ph <- sample(c(TRUE, FALSE), nrow(df2), replace=TRUE, prob=c(0.7,0.3))
+train_ph  <- df2[sample_ph, ]
+test_ph   <- df2[!sample_ph, ]
+
+```
+
+```{r make models,echo=FALSE, message=FALSE,warning=FALSE,results='markup'}
+
+#fit linear regression model
+train$basin<-as.factor(train$basin)
+fit <- lm(median ~ basin, data = train)
+
+
+#view model summary
+summary(fit)
+plot(fit)
+#confint(fit, level=0.99)
+
+#fit linear regression model pH
+train_ph$basin<-as.factor(train_ph$basin)
+fit_ph <- lm(median ~ basin, data = train_ph)
+
+#view model summary
+summary(fit_ph)
+plot(fit_ph)
+
+#create 80th percentile from train data
+train<-train %>% 
+  group_by(basin) %>% 
+  mutate(train_median = median(median,na.rm =TRUE),
+         pct_80 = quantile(median, 0.8,na.rm = TRUE))
+train_ph<-train_ph %>% 
+  group_by(basin) %>% 
+  mutate(train_median = median(median,na.rm =TRUE),
+         pct_80 = quantile(median, 0.8,na.rm = TRUE))
+
+
+```
+
+
+
+```{r test models hardness,echo=FALSE, message=FALSE,warning=FALSE,results='markup'}
+# Prediction
+# Make predictions
+predictions <- fit %>% 
+  predict(test)
+
+test$predictions<-predictions
+
+head(predictions)
+# Model performance
+# (a) Compute the prediction error, RMSE
+Metrics::rmse(test$median, test$predictions) 
+
+
+#These values were given to me by Catherine 
+test<-test %>% 
+  filter(!is.na(median)) %>% 
+  mutate(rmse=Metrics::rmse(median, predictions),
+         default = case_when(
+           basin %in% "14"~25,
+           basin %in% "17"~36,
+           basin %in% "08"~40,
+           basin %in% "09"~128,
+           basin %in% "10"~40,
+           basin %in% "11"~40,
+           basin %in% "02"~96,
+           basin %in% "06"~138,
+           basin %in% "05"~136,
+           basin %in% "04"~221,
+           basin %in% "01"~144,
+           basin %in% "12"~105,
+           basin %in% "03"~143,
+           basin %in% "07"~213,
+           TRUE~100)) %>% 
+  rowwise() %>% 
+           mutate(rmse_default = Metrics::rmse(median, default))
+
+
+test2<-ggplot2::ggplot(test,aes(basin,median))+ggplot2::geom_boxplot()+geom_violin(alpha = 0.05)
+test2+geom_point(aes(test$basin,test$predictions),color="#E69F00")+
+  geom_point(aes(test$basin,test$default),color="#0072B2") +
+  ggplot2::ggtitle("Test data set boxplots with predictions (orange) vs. Default (blue)")+
+  theme_classic()+ xlab("Basin")+ ylab("Hardness (mg/L)")
+
+rmse.plot<-ggplot2::ggplot(test,aes(basin,rmse))+geom_point()
+rmse.plot+
+  geom_point(aes(test$basin,test$rmse_default),color="purple")+
+  ggplot2::ggtitle("RMSE error from Models (black) vs. Default (purple)")
+
+
+```
+
+```{r test models ph,echo=FALSE, message=FALSE,warning=FALSE,results='markup'}
+# Prediction
+# Make predictions
+predictions_ph <- fit_ph %>% 
+  predict(test_ph)
+
+test_ph$predictions<-predictions_ph
+
+head(predictions_ph)
+# Model performance
+# (a) Compute the prediction error, RMSE
+Metrics::rmse(test_ph$median, test_ph$predictions) #might have to split by basin?
+#yes this worked
+train_short<-train_ph %>% 
+  select(basin, median) %>% 
+  group_by(basin) %>% 
+  summarize(pct_80 = quantile(median,0.80, na.rm = TRUE),
+            train_median = median(median))
+  
+
+test_ph<-merge(test_ph,train_short,
+                 by = "basin")
+
+test_ph2<-test_ph %>% 
+  group_by(basin) %>% 
+  filter(!is.na(median)) %>% 
+  rowwise() %>% 
+  mutate(rmse=Metrics::rmse(median, predictions),
+         default = as.numeric("7.5"),
+         rmse_default = Metrics::rmse(median,default),
+         rmse_pct_80 = Metrics::rmse(median, pct_80),
+         rmse_act_median = Metrics::rmse(median,train_median))
+
+
+
+test3<-ggplot2::ggplot(test_ph2,aes(basin,median))+ggplot2::geom_boxplot()+geom_violin(alpha = 0.05)
+test3+geom_point(aes(test_ph2$basin,test_ph2$predictions),color="#E69F00" )+
+  geom_hline(yintercept = 7.5,aes(test_ph2$basin,test_ph2$default),color="#0072B2" )+
+  #geom_point(aes(test_ph2$basin,test_ph2$pct_80),color = "red")+
+  #geom_point(aes(test_ph2$basin,test_ph2$train_median),color = "pink")+
+  ggplot2::ggtitle("Test data set boxplots with predictions(orange) vs. Default (dotted blue)")+
+  ylab("pH units")+xlab("Basins")+
+  theme_classic()
+
+rmse.plot2<-ggplot2::ggplot(test_ph2,aes(basin,rmse))+geom_point()
+rmse.plot2+
+  geom_point(aes(test_ph2$basin,test_ph2$rmse_default),color="purple")+
+  geom_point(aes(test_ph2$basin, test_ph2$rmse_pct_80),color = "red")+
+  geom_point(aes(test_ph2$basin, test_ph2$rmse_act_median),color = "pink")+
+  ggplot2::ggtitle("RMSE error from Models (black) vs. Default (purple)")
+```
+
+```{r eco-region,echo=FALSE, message=FALSE,warning=FALSE,results='markup'}
+#read in the eco-region merge file
+eco<-read.csv(here::here("data/sites_eco_merge.csv"))
+
+ph_raw_eco<-merge(ph_raw,eco,
+                  by.x ="ISWC_EVENT_SMAS_HISTORY_ID",
+                  by.y="CHS_EVENT_SMAS_HISTORY_ID")
+
+hardness_eco<-merge(hardness, eco,
+                    by ="CHS_EVENT_SMAS_HISTORY_ID")
+
+
+ph_all_raw<-merge(field$insitu,eco,
+                  by.x ="ISWC_EVENT_SMAS_HISTORY_ID",
+                  by.y="CHS_EVENT_SMAS_HISTORY_ID")
+
+hardness_all_raw<-merge(chem,eco,
+                       by="CHS_EVENT_SMAS_HISTORY_ID" )
+
+#summary for Catherine
+
+# ph_eco_sum<-ph_all_raw %>%
+#   filter(CHEM_PARAMETER_NAME %in% "PH") %>%
+#   mutate(year = as.numeric(format(ISWC_EVENT_SMAS_SAMPLE_DATE,"%Y"))) %>%
+#   filter(year > 2012) %>%
+#   mutate(basin = substr(ISWC_EVENT_SMAS_HISTORY_ID,1,2)) %>%
+#   group_by(US_L3NAME,US_L3CODE) %>%
+#   summarise(median = median(ISWC_RESULT))
+# 
+# hardness_eco_sum <- hardness_all_raw %>%
+#   filter(CHEM_PARAMETER_NAME %in% "HARDNESS (AS CACO3)") %>%
+#   mutate(year = as.numeric(format(CHS_EVENT_SMAS_SAMPLE_DATE,"%Y"))) %>%
+#   filter(year > 2012) %>%
+#   mutate(basin = substr(CHS_EVENT_SMAS_HISTORY_ID,1,2)) %>%
+#   group_by(US_L3NAME,US_L3CODE) %>%
+#   summarise(median = median(CHR_RESULT_VALUE,na.rm=TRUE))
+# 
+# write.csv(ph_eco_sum,"outputs/eco_ph_Catherine.csv")
+# write.csv(hardness_eco_sum,"outputs/eco_hardness_Catherine.csv")
+```
+
+
+```{r split into train vs test eco,echo=FALSE, message=FALSE,warning=FALSE,results='markup'}
+
+#make this example reproducible
+set.seed(1)
+df_eco<-hardness_eco
+
+#use 70% of dataset as training set and 30% as test set
+sample_eco <- sample(c(TRUE, FALSE), nrow(df_eco), replace=TRUE, prob=c(0.7,0.3))
+train_eco  <- df_eco[sample_eco, ]
+test_eco  <- df_eco[!sample_eco, ]
+
+#same for ph
+df3<-ph_raw_eco
+
+#use 70% of dataset as training set and 30% as test set
+sample_ph_eco <- sample(c(TRUE, FALSE), nrow(df3), replace=TRUE, prob=c(0.7,0.3))
+train_ph_eco  <- df3[sample_ph_eco, ]
+test_ph_eco   <- df3[!sample_ph_eco, ]
+
+```
+
+
+```{r make models eco,echo=FALSE, message=FALSE,warning=FALSE,results='markup'}
+
+#fit linear regression model
+fit_eco_hardness <- lm(median ~ as.factor(L3_KEY), data = train_eco)
+
+#view model summary
+summary(fit_eco_hardness)
+
+#fit linear regression model pH
+fit_ph_eco <- lm(median ~ as.factor(L3_KEY), data = train_ph_eco)
+
+#view model summary
+summary(fit_ph_eco)
+
+```
+
+
+```{r test models eco hardness,echo=FALSE, message=FALSE,warning=FALSE,results='markup'}
+# Prediction
+# Make predictions
+predictions <- fit_eco_hardness %>% 
+  predict(test_eco)
+
+test_eco$predictions<-predictions
+
+head(predictions)
+# Model performance
+# (a) Compute the prediction error, RMSE
+Metrics::rmse(test_eco$median, test_eco$predictions) #might have to split by basin?
+
+
+test_eco2<-test_eco %>% 
+  group_by(L3_KEY) %>% 
+  filter(!is.na(median)) %>% 
+  rowwise() %>% 
+  mutate(rmse=Metrics::rmse(median, predictions),
+         default = as.numeric("100"),
+         rmse_default = Metrics::rmse(median,default))
+  
+
+
+test2<-ggplot2::ggplot(test_eco2,aes(L3_KEY,median))+ggplot2::geom_boxplot()+geom_violin(alpha = 0.05)
+test2+geom_point(aes(test_eco2$L3_KEY,test_eco2$predictions),color="blue")+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  geom_point(aes(test_eco2$L3_KEY,test_eco2$default),color="purple")+
+  ggplot2::ggtitle("Test data set boxplots with predictions : Models (blue) vs. Default (purple)")
+
+rmse.plot<-ggplot2::ggplot(test_eco2,aes(L3_KEY,rmse))+geom_point()
+rmse.plot+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  geom_point(aes(test_eco2$L3_KEY,test_eco2$rmse_default),color="purple")+
+  ggplot2::ggtitle("RMSE error from Models (black) vs. Default (purple)")
+```
+
+```{r test models eco ph,echo=FALSE, message=FALSE,warning=FALSE,results='markup'}
+# Prediction
+# Make predictions
+predictions <- fit_ph_eco %>% 
+  predict(test_ph_eco)
+
+test_ph_eco$predictions<-predictions
+
+head(predictions)
+# Model performance
+# (a) Compute the prediction error, RMSE
+Metrics::rmse(test_ph_eco$median, test_ph_eco$predictions) #might have to split by basin?
+#yes this worked
+
+train_ph_eco2<-train_ph_eco %>% 
+  select(L3_KEY, median) %>% 
+  group_by(L3_KEY) %>% 
+  summarize(pct_80 = quantile(median,0.80, na.rm = TRUE))
+  
+
+test_ph_eco<-merge(test_ph_eco,train_ph_eco2,
+                 by = "L3_KEY")
+
+
+test_ph_eco2<-test_ph_eco %>% 
+  group_by(L3_KEY) %>% 
+  filter(!is.na(median)) %>% 
+  mutate(rmse=Metrics::rmse(median, predictions),
+         default = as.numeric("7.5"),
+         rmse_default = Metrics::rmse(median,default),
+         rmse_pct_80 = Metrics::rmse(median, pct_80))
+
+
+test2<-ggplot2::ggplot(test_ph_eco2,aes(L3_KEY,median))+ggplot2::geom_boxplot()+geom_violin(alpha = 0.05)
+test2+geom_point(aes(test_ph_eco2$L3_KEY,test_ph_eco2$predictions),color="blue")+
+  geom_point(aes(test_ph_eco2$L3_KEY,test_ph_eco2$default),color="purple")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  geom_point(aes(test_ph_eco2$L3_KEY,test_ph_eco2$pct_80),color = "red")+
+  ggplot2::ggtitle("Test data set boxplots with predictions : Models (blue) vs. Default (purple)")
+  
+
+rmse.plot<-ggplot2::ggplot(test_ph_eco2,aes(L3_KEY,rmse))+geom_point()
+rmse.plot+geom_point(aes(test_ph_eco2$L3_KEY,test_ph_eco2$rmse_default),color="purple")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  geom_point(aes(test_ph_eco2$L3_KEY,test_ph_eco2$rmse_pct_80),color = "red")+
+  ggplot2::ggtitle("RMSE error from Models (black) vs. Default (purple)")
+```
+
+
+```{r testing probabalistic}
+
+#read in the analysis files
+prob_basins_ph<-readRDS("outputs/prob_ph_basin.RDS")
+prob_basins_hardness<-readRDS("outputs/prob_hardness_basin.RDS")
+
+
+prob_hardness_eco<-readRDS("outputs/prob_hardness_eco.RDS")
+prob_ph_eco<-readRDS("outputs/prob_ph_eco.RDS")
+
+#read in the raw site data
+insitu<-read.csv(here::here("data/insitu_joined_17_21.csv"))
+
+hardness<-read.csv(here::here("data/chem_joined_18_22.csv"))
+
+
+```
+
+## Testing the Probabalistic Draw for medians by Basin
+
+
+```{r create test data set}
+
+#make this example reproducible, and re-grab  without the prob sites
+hardness2<-chem %>% 
+  filter(CHEM_PARAMETER_NAME %in% "HARDNESS (AS CACO3)") %>% 
+  mutate(year = as.numeric(format(CHS_EVENT_SMAS_SAMPLE_DATE,"%Y")),
+         matching = paste(CHS_EVENT_SMAS_HISTORY_ID,year,sep = "_")) %>% 
+  filter(year < 2018) %>%
+  mutate(basin = substr(CHS_EVENT_SMAS_HISTORY_ID,1,2))
+
+ph_raw2<-field$insitu %>% 
+  filter(CHEM_PARAMETER_NAME %in% "PH") %>% 
+  mutate(year = as.numeric(format(ISWC_EVENT_SMAS_SAMPLE_DATE,"%Y")),
+         matching = paste(ISWC_EVENT_SMAS_HISTORY_ID,year,sep = "_")) %>% 
+  filter(year < 2017) %>% 
+  mutate(basin = substr(ISWC_EVENT_SMAS_HISTORY_ID,1,2)) %>% 
+  filter(ISWC_RESULT > 0) %>% 
+  group_by(basin) %>% 
+  mutate(pct_80 = quantile(ISWC_RESULT,0.80,na.rm = TRUE)) %>% 
+  ungroup()
+  
+```
+
+```{r create-tables-predictions}
+
+ph_prob_predictions<-prob_basins_ph$Mean %>% 
+  mutate(basin = Subpopulation,
+         prediction = Estimate)
+ph_raw2$basin<-as.numeric(ph_raw2$basin)
+ph_raw2$basin<-as.character(ph_raw2$basin)
+
+
+hardness_prob_predictions<-prob_basins_hardness$Mean %>% 
+  mutate(basin = Subpopulation,
+         prediction = Estimate)
+
+test_ph_prob<-merge(ph_raw2,ph_prob_predictions,
+                    by = "basin")
+
+hardness2$basin<-as.numeric(hardness2$basin)
+hardness2$basin<-as.character(hardness2$basin)
+
+test_hardness_prob<-merge(hardness2, hardness_prob_predictions,
+                          by= "basin")
+#create the RMSE columns
+
+test_ph_prob<-test_ph_prob %>% 
+  rowwise() %>% #why did i have to specify that?
+  mutate(rmse = Metrics::rmse(ISWC_RESULT, prediction),
+         default = as.numeric("7.5"),
+         rmse_default = Metrics::rmse(ISWC_RESULT, default),
+         rmse_pct_80 = Metrics::rmse(ISWC_RESULT, pct_80))
+
+test_hardness_prob<-test_hardness_prob %>% 
+  filter(!is.na(CHR_RESULT_VALUE)) %>% 
+  ungroup() %>% 
+  rowwise() %>% 
+  mutate(rmse = Metrics::rmse(CHR_RESULT_VALUE, prediction),
+         default = case_when(
+           basin %in% "14"~25,
+           basin %in% "17"~36,
+           basin %in% "08"~40,
+           basin %in% "09"~128,
+           basin %in% "10"~40,
+           basin %in% "11"~40,
+           basin %in% "02"~96,
+           basin %in% "06"~138,
+           basin %in% "05"~136,
+           basin %in% "04"~221,
+           basin %in% "01"~144,
+           basin %in% "12"~105,
+           basin %in% "03"~143,
+           basin %in% "07"~213,
+           TRUE~100),
+         rmse_default = Metrics::rmse(CHR_RESULT_VALUE, default))
+
+```
+
+```{r plot-the-rmse-ph}
+
+
+
+test2<-ggplot2::ggplot(test_ph_prob,aes(BASIN,ISWC_RESULT))+ggplot2::geom_boxplot()+geom_violin(alpha = 0.05)
+test2+geom_point(aes(BASIN,prediction),color="#E69F00" )+
+  geom_point(aes(BASIN,default),color="#0072B2")+
+ # geom_point(aes(basin,pct_80),color="red")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggplot2::ggtitle("Test data set boxplots with predictions (orange) vs. Default (blue)")+
+  theme_classic()+ylab("pH") + xlab("Basin")
+
+
+test_ph_sum<-test_ph_prob %>% 
+  group_by(basin) %>% 
+  summarise(rmse = mean(rmse),
+            rmse_default = mean(rmse_default),
+            rmse_pct_80 = mean(rmse_pct_80))
+
+rmse.plot<-ggplot2::ggplot(test_ph_sum,aes(basin,rmse))+geom_point()
+rmse.plot+geom_point(aes(test_ph_sum$basin,test_ph_sum$rmse_default),color="purple")+
+  geom_point(aes(test_ph_sum$basin,test_ph_sum$rmse_pct_80),color="red")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggplot2::ggtitle("RMSE error from Models (black) vs. Default (purple)")
+```
+
+```{r plot-the-rmse-hardness}
+
+test_hardness_prob<-test_hardness_prob %>% 
+  mutate(Basin__ = as.numeric(Basin__)) %>% 
+  arrange(Basin__) %>% 
+  mutate(basin = as.factor(basin))
+
+test2<-ggplot2::ggplot(test_hardness_prob,aes(basin,CHR_RESULT_VALUE))+ggplot2::geom_boxplot(alpha = 0.05)+geom_violin(alpha = 0.05)
+test2+geom_point(aes(basin,prediction),color="#E69F00")+
+  geom_point(aes(basin,default),color="#0072B2")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggplot2::ggtitle("Test data set boxplots with predictions (orange) vs. Default (blue)")+
+  theme_classic()+ylab("Hardness (mg/l)")+xlab("Basin")
+
+
+test_hardness_prob_sum<-test_hardness_prob %>% 
+  group_by(basin) %>% 
+  summarise(rmse = mean(rmse),
+            rmse_default = mean(rmse_default))
+
+rmse.plot<-ggplot2::ggplot(test_hardness_prob_sum,aes(basin,rmse))+geom_point()
+rmse.plot+geom_point(aes(basin,rmse_default),color="purple")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggplot2::ggtitle("RMSE error from Models (black) vs. Default (purple)")
+```
+## Eco Region Probabilistic Test
+
+```{r merge eco regions}
+
+hardness_prob_eco<-left_join(hardness2,eco,
+                             by = "CHS_EVENT_SMAS_HISTORY_ID")
+
+ph_raw2$CHS_EVENT_SMAS_HISTORY_ID <-ph_raw2$ISWC_EVENT_SMAS_HISTORY_ID
+
+ph_prob_eco<-left_join(ph_raw2,eco,
+                       by = "CHS_EVENT_SMAS_HISTORY_ID")
+ph_prob_eco<-ph_prob_eco %>% 
+  group_by(US_L3CODE) %>% 
+  mutate(pct_80 = quantile(ISWC_RESULT,0.80,na.rm = TRUE)) %>% 
+  ungroup()
+  
+```
+
+```{r create predictions tables eco}
+#read in hte data 
+ph_eco_prob<-readRDS(here::here("outputs/prob_ph_eco.RDS"))
+hardness_eco_prob<-readRDS(here::here("outputs/prob_hardness_eco.RDS"))
+
+
+ph_prob_predictions_eco<-ph_eco_prob$Mean %>% 
+  mutate(US_L3CODE = Subpopulation,
+         prediction = Estimate)
+
+hardness_prob_predictions_eco<-hardness_eco_prob$Mean %>% 
+  mutate(US_L3CODE = Subpopulation,
+         prediction = Estimate)
+
+test_ph_prob_eco<-merge(ph_prob_eco,ph_prob_predictions_eco,
+                    by = "US_L3CODE")
+
+hardness_prob_eco$US_L3CODE<-as.character(hardness_prob_eco$US_L3CODE) #changign type so they merge
+test_ph_prob_eco$US_L3CODE<-as.character(test_ph_prob_eco$US_L3CODE) #changign type so they merge
+
+test_hardness_prob_eco<-merge(hardness_prob_eco, hardness_prob_predictions_eco,
+                          by= "US_L3CODE")
+#create the RMSE columns
+
+test_ph_prob_eco<-test_ph_prob_eco %>% 
+  rowwise() %>% #why did i have to specify that? probably bc it's not meant to
+  mutate(rmse = Metrics::rmse(ISWC_RESULT, prediction),
+         default = as.numeric("7.5"),
+         rmse_default = Metrics::rmse(ISWC_RESULT, default),
+         rmse_pct_80 = Metrics::rmse(ISWC_RESULT,pct_80))
+
+Metrics::rmse(test_ph_prob_eco$ISWC_RESULT,test_ph_prob_eco$prediction)
+Metrics::rmse(test_ph_prob_eco$ISWC_RESULT,test_ph_prob_eco$default)
+
+mean(abs((test_ph_prob_eco$ISWC_RESULT-test_ph_prob_eco$prediction)/test_ph_prob_eco$ISWC_RESULT)) * 100
+mean(abs((test_ph_prob_eco$ISWC_RESULT-test_ph_prob_eco$default)/test_ph_prob_eco$ISWC_RESULT)) * 100
+
+test_hardness_prob_eco<-test_hardness_prob_eco %>% 
+  filter(!is.na(CHR_RESULT_VALUE)) %>% 
+  ungroup() %>% 
+  rowwise() %>% 
+  mutate(rmse = Metrics::rmse(CHR_RESULT_VALUE, prediction),
+         default = as.numeric("100"),
+         rmse_default = Metrics::rmse(CHR_RESULT_VALUE, default))
+
+```
+
+```{r plot rmse-eco-pH}
+test2<-ggplot2::ggplot(test_ph_prob_eco,aes(US_L3CODE,ISWC_RESULT))+ggplot2::geom_boxplot()+geom_violin(alpha = 0.05)
+test2+geom_point(aes(US_L3CODE,prediction),color="blue")+
+  geom_point(aes(US_L3CODE,default),color="purple")+
+  geom_point(aes(US_L3CODE,pct_80),color="red")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggplot2::ggtitle("Test data set boxplots with predictions : Models (blue) vs. Default (purple)")
+
+test_ph_sum_eco<-test_ph_prob_eco %>% 
+  group_by(US_L3CODE) %>% 
+  summarise(rmse = mean(rmse),
+            rmse_default = mean(rmse_default),
+            rmse_pct_80 = mean(rmse_pct_80))
+
+rmse.plot<-ggplot2::ggplot(test_ph_sum_eco,aes(US_L3CODE,rmse))+geom_point()
+rmse.plot+geom_point(aes(test_ph_sum_eco$US_L3CODE,test_ph_sum_eco$rmse_default),color="purple")+
+  geom_point(aes(test_ph_sum_eco$US_L3CODE,test_ph_sum_eco$rmse_pct_80),color="red")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggplot2::ggtitle("RMSE error from Models (black) vs. Default (purple)")
+```
+
+
+```{r plot rmse-eco-hardness}
+test2<-ggplot2::ggplot(test_hardness_prob_eco,aes(US_L3NAME,CHR_RESULT_VALUE))+ggplot2::geom_boxplot()+geom_violin(alpha = 0.05)
+test2+geom_point(aes(US_L3NAME,prediction),color="blue")+
+  geom_point(aes(US_L3NAME,default),color="purple")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggplot2::ggtitle("Test data set boxplots with predictions : Models (blue) vs. Default (purple)")
+
+test_hardness_prob_sum_eco<-test_hardness_prob_eco %>% 
+  group_by(US_L3CODE) %>% 
+  summarise(rmse = mean(rmse),
+            rmse_default = mean(rmse_default))
+
+rmse.plot<-ggplot2::ggplot(test_hardness_prob_sum_eco,aes(US_L3CODE,rmse))+geom_point()
+rmse.plot+geom_point(aes(test_hardness_prob_sum_eco$US_L3CODE,test_hardness_prob_sum_eco$rmse_default),color="purple")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggplot2::ggtitle("RMSE error from Models (black) vs. Default (purple)")
+
+test2<-ggplot2::ggplot(test_hardness_prob_eco,aes(CHR_RESULT_VALUE,prediction))+ggplot2::geom_point()
+test2+geom_point(aes(CHR_RESULT_VALUE,default),color="purple")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  ggplot2::ggtitle("Test data set boxplots with predictions : Models (blue) vs. Default (purple)")
+
+
+```
+
+## Putting it all together
+
+```{r}
+#medians
+medians<-list(
+basin_ph = mean(test_ph2$rmse),
+basin_ph_80 = mean(test_ph2$rmse_pct_80),
+basin_hardness = mean(test$rmse),
+eco_hardness = mean(test_eco2$rmse),
+eco_ph = mean(test_ph_eco2$rmse),
+eco_ph_80 = mean(test_ph_eco2$rmse_pct_80)
+)
+
+#defaults
+defaults<-list(
+  basin_ph_default = mean(test_ph2$rmse_default),
+  basin_hardness_default = mean(test$rmse_default),
+  eco_hardness_default = mean(test_eco2$rmse_default),
+  eco_ph_default = mean(test_ph_eco2$rmse_default)
+)
+
+medians_all<-as.data.frame(append(medians, defaults))
+medians_all<-medians_all %>% 
+  tidyr::pivot_longer(cols = 1:max(ncol(medians_all)),
+                      names_to = "type",
+                      values_to = "rmse") %>% 
+  mutate(fill = case_when(grepl("default",type)~"default",
+                          TRUE~"model")) %>% 
+    mutate(param = case_when(grepl("ph",type)~"ph",
+                          TRUE~"hardness")) %>% 
+  mutate(analysis = case_when(grepl("eco",type)~"eco_region_medians",
+                          TRUE~"basin_medians")) 
+
+#plot these
+medians<-ggplot2::ggplot(medians_all,aes(type,rmse,fill = fill))+geom_bar(stat = "identity")+
+  ggplot2::ggtitle("RMSE error from Models vs. Default")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+medians + facet_wrap(~param,scales = "free")
+
+
+#probabilistic
+prob_list<-list(
+  prob_hardness = mean(test_hardness_prob$rmse),
+  prob_ph = mean(test_ph_prob$rmse),
+  prob_ph_80 = mean(test_ph_prob$rmse_pct_80),
+  prob_eco_hardness = mean(test_hardness_prob_eco$rmse),
+  prob_eco_ph = mean(test_ph_eco2$rmse),
+  prob_eco_ph_80 = mean(test_ph_eco2$rmse_pct_80)
+)
+
+#prob default
+default_prob_list<-list(
+  prob_hardness_d = mean(test_hardness_prob$rmse_default),
+  prob_ph_d = mean(test_ph_prob$rmse_default),
+  prob_eco_hardness_d = mean(test_hardness_prob_eco$rmse_default),
+  prob_eco_ph_d = mean(test_ph_eco2$rmse_default)
+)
+
+
+prob_all<-as.data.frame(append(prob_list,default_prob_list))
+
+prob_all<-prob_all %>% 
+  tidyr::pivot_longer(cols = 1:max(ncol(prob_all)),
+                      names_to = "type",
+                      values_to = "rmse") %>% 
+  mutate(fill = case_when(grepl("_d",type)~"default",
+                          TRUE~"model")) %>% 
+  mutate(param = case_when(grepl("ph",type)~"ph",
+                          TRUE~"hardness")) %>% 
+  mutate(analysis = case_when(grepl("eco",type)~"probabilistic_eco_region",
+                          TRUE~"probabilistic_basins")) 
+#plot these
+prob_plot<-ggplot2::ggplot(prob_all,aes(type,rmse,fill = fill))+geom_bar(stat = "identity")+
+  ggplot2::ggtitle("RMSE error from Probabalistic vs. Default")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+prob_plot + facet_wrap(~param,scales = "free")
+
+
+all_together_now<-rbind(prob_all,medians_all)
+
+all_together_now<-all_together_now %>% 
+  mutate(analysis = case_when(
+    type == "prob_eco_hardness"~"probabilistic_eco_region",
+    type == "prob_eco_ph"~"probabilistic_eco_region",
+    type == "prob_eco_hardness_d"~"probabilistic_eco_region",	
+    type == "prob_eco_ph_d"~"probabilistic_eco_region",	
+    TRUE~analysis
+  ))
+
+prob_plot2<-ggplot2::ggplot(all_together_now,aes(type,rmse,fill = analysis,density=fill))+geom_bar(stat = "identity")+
+  ggplot2::ggtitle("RMSE error from Models vs. Default")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+prob_plot2 + facet_wrap(~param,scales = "free")
+
+
+```
+
+```{r testing-the-differences}
+options(scipen = 999)
+ph2_long<-test_ph2 %>% 
+  select(basin, ISWC_EVENT_SMAS_HISTORY_ID,train_median,
+         default,pct_80,predictions) %>% 
+  tidyr::pivot_longer(!c(basin,ISWC_EVENT_SMAS_HISTORY_ID),
+                       names_to = "method", 
+                       values_to = "result")
+
+#grab the probabilistic to put in there
+
+
+ktest<-kruskal.test(method ~ result, data = ph2_long) 
+ktest
+
+d_ph<-dunns<-FSA::dunnTest(result ~ method, data = ph2_long)
+dunns
+
+plot<-ggplot2::ggplot(ph2_long,aes(method,result, group = method))+
+  geom_point()+geom_smooth()
+plot
+
+
+```
+
+```{r testing-the-differences-hardness-basin}
+options(scipen = 999)
+hardness_long<-test %>% 
+  select(basin, CHS_EVENT_SMAS_HISTORY_ID,
+         default,predictions,median) %>% 
+  tidyr::pivot_longer(!c(basin,CHS_EVENT_SMAS_HISTORY_ID),
+                       names_to = "method", 
+                       values_to = "result")
+
+ktest<-kruskal.test(method ~ result, data = hardness_long) 
+ktest
+d_hard<-dunns<-FSA::dunnTest(result ~ method, data = hardness_long)
+dunns
+
+plot<-ggplot2::ggplot(hardness_long,aes(sample = result, color = method))+
+  stat_qq()+stat_qq_line()
+plot
+
+plot<-ggplot2::ggplot(hardness_long,aes(method,result, group = method))+
+  geom_point()+geom_smooth()
+plot
+
+
+```
+
+```{r}
+#medians rmse(actual, predicted)
+medians_2<-list(
+basin_ph = Metrics::rmse(test_ph2$median,test_ph2$train_median),
+basin_ph_80 = Metrics::rmse(test_ph2$median,test_ph2$pct_80),
+basin_hardness = Metrics::rmse(test$median,test$predictions),
+eco_hardness = Metrics::rmse(test_eco2$median,test_eco2$predictions),
+eco_ph = Metrics::rmse(test_ph_eco2$median,test_ph_eco2$predictions),
+eco_ph_80 = Metrics::rmse(test_ph_eco2$median,test_ph_eco2$pct_80)
+)
+
+#defaults
+defaults_2<-list(
+  basin_ph_default = Metrics::rmse(test_ph2$median,test_ph2$default),
+  basin_hardness_default = Metrics::rmse(test$median,test$default),
+  eco_hardness_default = Metrics::rmse(test_eco2$median,test_eco2$default),
+  eco_ph_default = Metrics::rmse(test_ph_eco2$median,test_ph_eco2$default)
+)
+
+medians_all_2<-as.data.frame(append(medians_2, defaults_2))
+medians_all_2<-medians_all_2 %>% 
+  tidyr::pivot_longer(cols = 1:max(ncol(medians_all_2)),
+                      names_to = "type",
+                      values_to = "rmse") %>% 
+  mutate(fill = case_when(grepl("default",type)~"default",
+                          TRUE~"model")) %>% 
+    mutate(param = case_when(grepl("ph",type)~"ph",
+                          TRUE~"hardness")) %>% 
+  mutate(analysis = case_when(grepl("eco",type)~"eco_region_medians",
+                          TRUE~"basin_medians")) 
+
+#plot these
+medians_2_plot<-ggplot2::ggplot(medians_all_2,aes(type,rmse,fill = fill))+geom_bar(stat = "identity")+
+  ggplot2::ggtitle("RMSE error from Models vs. Default")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+medians_2_plot + facet_wrap(~param,scales = "free")
+
+
+#probabilistic
+prob_list_2<-list(
+  prob_hardness = Metrics::rmse(test_hardness_prob$CHR_RESULT_VALUE,test_hardness_prob$prediction),
+  prob_ph = Metrics::rmse(test_ph_prob$ISWC_RESULT,test_ph_prob$prediction),
+  prob_ph_80 = Metrics::rmse(test_ph_prob$pct_80,test_ph_prob$prediction),
+  prob_eco_hardness = Metrics::rmse(test_hardness_prob_eco$CHR_RESULT_VALUE,test_hardness_prob_eco$prediction),
+  prob_eco_ph = Metrics::rmse(test_ph_eco2$median,test_ph_eco2$predictions),
+  prob_eco_ph_80 = Metrics::rmse(test_ph_eco2$pct_80,test_ph_eco2$predictions)
+)
+
+#prob default
+default_prob_list_2<-list(
+  prob_hardness_d = Metrics::rmse(test_hardness_prob$CHR_RESULT_VALUE,test_hardness_prob$default),
+  prob_ph_d = Metrics::rmse(test_ph_prob$ISWC_RESULT,test_ph_prob$default),
+  prob_eco_hardness_d = Metrics::rmse(test_hardness_prob_eco$CHR_RESULT_VALUE,test_hardness_prob_eco$default),
+  prob_eco_ph_d = Metrics::rmse(test_ph_eco2$median,test_ph_eco2$default)
+)
+
+
+prob_all_2<-as.data.frame(append(prob_list_2,default_prob_list_2))
+
+prob_all_3<-prob_all_2 %>% 
+  tidyr::pivot_longer(cols = 1:max(ncol(prob_all_2)),
+                      names_to = "type",
+                      values_to = "rmse") %>% 
+  mutate(fill = case_when(grepl("_d",type)~"default",
+                          TRUE~"model")) %>% 
+  mutate(param = case_when(grepl("ph",type)~"ph",
+                          TRUE~"hardness")) %>% 
+  mutate(analysis = case_when(grepl("eco",type)~"probabilistic_eco_region",
+                          TRUE~"probabilistic_basins")) 
+#plot these
+prob_plot<-ggplot2::ggplot(prob_all_3,aes(type,rmse,fill = fill))+geom_bar(stat = "identity")+
+  ggplot2::ggtitle("RMSE error from Probabalistic vs. Default")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+prob_plot + facet_wrap(~param,scales = "free")
+
+
+all_together_now_2<-rbind(prob_all_3,medians_all_2)
+
+all_together_now_2<-all_together_now_2 %>% 
+  mutate(analysis = case_when(
+    type == "prob_eco_hardness"~"probabilistic_eco_region",
+    type == "prob_eco_ph"~"probabilistic_eco_region",
+    type == "prob_eco_hardness_d"~"probabilistic_eco_region",	
+    type == "prob_eco_ph_d"~"probabilistic_eco_region",	
+    TRUE~analysis
+  ))
+
+prob_plot2<-ggplot2::ggplot(all_together_now,aes(type,rmse,fill = analysis,density=fill))+geom_bar(stat = "identity")+
+  ggplot2::ggtitle("RMSE error from Models vs. Default")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+prob_plot2 + facet_wrap(~param,scales = "free")
+
+all_together_now_3<-all_together_now %>% 
+  filter(fill == "model") %>% 
+  filter(!grepl("*_80",type))
+
+prob_plot_3<-ggplot2::ggplot(all_together_now_3,aes(type,rmse,fill = analysis,density=fill))+geom_bar(stat = "identity")+
+  ggplot2::ggtitle("RMSE error from Models vs. Default")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+prob_plot_3 + facet_wrap(~param,scales = "free")
+
+```
