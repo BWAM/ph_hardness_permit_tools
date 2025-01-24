@@ -11,27 +11,31 @@ library(ggplot2)
 library(dplyr)
 library(fetch)
 
-remotes::install_github("BWAM/fetch",
-auth_token = gitcreds::gitcreds_get()$password)
+# remotes::install_github("BWAM/fetch",
+# auth_token = gitcreds::gitcreds_get()$password)
 ```
 
 
 ```{r fetch data, echo=FALSE, message=FALSE,warning=FALSE,results='markup'}
 chem<-fetch::fetch_chem(path = "C:/Users/kareynol/OneDrive - New York State Office of Information Technology Services/Streams Data Modernization/Cleaned Files",
                   output = "standard")
-#rite.csv(chem,"data/chem_from_db_6_12_23.csv")
+#write.csv(chem,"data/chem_from_db_6_12_23.csv")
 #write data as an RDS for final versioning
-readr::write_rds(chem,"data/chem_from_db_6_12_23.rds")
+#readr::write_rds(chem,"data/chem_from_db_6_12_23.rds")
+#chem<-readRDS(here::here("data/chem_from_db_6_12_23.rds"))
 
 hardness<-chem %>% 
   filter(CHEM_PARAMETER_NAME %in% "HARDNESS (AS CACO3)") %>% 
+  filter(!CHR_VALIDATOR_QUAL %in% "R") |> 
   mutate(year = as.numeric(format(CHS_EVENT_SMAS_SAMPLE_DATE,"%Y"))) %>% 
   filter(year > 2012) %>% 
   mutate(basin = substr(CHS_EVENT_SMAS_HISTORY_ID,1,2)) %>% 
   group_by(CHS_EVENT_SMAS_HISTORY_ID,basin) %>% 
   summarise(median = median(CHR_RESULT_VALUE))
 
-field<-fetch::fetch_field(output = "standard")
+# field<-fetch::fetch_field(output = "standard")
+# readr::write_rds(field,"data/field_from_db_6_12_23.rds")
+readRDS("data/field_from_db_6_12_23.rds")
 
 ph_raw<-field$insitu %>% 
   filter(CHEM_PARAMETER_NAME %in% "PH") %>% 
@@ -54,12 +58,17 @@ ph_basin_sum<-field$insitu %>%
   filter(CHEM_PARAMETER_NAME %in% "PH") %>%
   mutate(year = as.numeric(format(ISWC_EVENT_SMAS_SAMPLE_DATE,"%Y"))) %>%
   filter(year > 2012) %>%
+  filter(ISWC_RESULT >1) |> #filter out any -9999's from data set
   group_by(ISWC_EVENT_SMAS_HISTORY_ID) %>% 
   summarise(median_site = median(ISWC_RESULT,na.rm = TRUE)) %>% 
   mutate(basin = substr(ISWC_EVENT_SMAS_HISTORY_ID,1,2)) %>%
   ungroup() %>% 
   group_by(basin) %>%
-  summarise(median = median(median_site,na.rm = TRUE))
+  summarise(median = round(median(median_site,na.rm = TRUE),digits =1),
+            q20 = round(quantile(median_site,0.2),digits =1),
+            q25 = round(quantile(median_site,0.25),digits =1),
+            q75 = round(quantile(median_site,0.75),digits = 1),
+            q80 = round(quantile(median_site, 0.8), digits =1))
 # 
 hardness_basin_sum <- chem %>%
   filter(CHEM_PARAMETER_NAME %in% "HARDNESS (AS CACO3)") %>%
@@ -86,7 +95,7 @@ temp_basin_sum<-field$insitu %>%
   summarise(median = median(median_site,na.rm = TRUE))
 
 # write.csv(hardness_basin_sum,"outputs/hardness_basin_Catherine.csv")
-# write.csv(ph_basin_sum,"outputs/ph_basin_Catherine.csv")
+ # write.csv(ph_basin_sum,"outputs/ph_basin_Catherine.csv")
 # write.csv(temp_basin_sum,"outputs/temp_basin_Catherine.csv")
 
 
@@ -931,3 +940,4 @@ prob_plot_3<-ggplot2::ggplot(all_together_now_3,aes(type,rmse,fill = analysis,de
 prob_plot_3 + facet_wrap(~param,scales = "free")
 
 ```
+
